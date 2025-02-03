@@ -25,18 +25,65 @@ async function classifyMessage(message) {
 
 // Generates an SQL query based on user input
 async function generateSQLQuery(message) {
-  const prompt = `Convert the following user question into an SQL query and don't use any formating on the response: "${message}"`;
+  const prompt = `Convert the following user question into an SQL query without any formatting: "${message}"`;
   const model = genAI.getGenerativeModel({ model: "gemini-pro" });
   const response = await model.generateContent(prompt);
-  return response.response.candidates[0].content.parts[0].text
-    .trim()
-    .replace(/^`|`$/g, "");
+
+  let query = response.response.candidates[0].content.parts[0].text.trim();
+
+  // Ensure the query ends with a semicolon
+  if (!query.endsWith(";")) {
+    query += ";";
+  }
+
+  console.log("Generated SQL Query:", query); // Log SQL query for debugging
+  return query;
+}
+
+// Validates the SQL query
+function validateSQLQuery(query) {
+  const validSQLCommands = ["SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "DROP"];
+  const command = query.split(" ")[0].toUpperCase();
+  return validSQLCommands.includes(command);
+}
+
+// Extracts the table name from the SQL query
+function extractTableName(query) {
+  const match = query.match(/(?:FROM|INTO|UPDATE|TABLE)\s+(\w+)/i);
+  return match ? match[1] : null;
+}
+
+// Checks if the table exists
+async function checkTableExists(tableName) {
+  const query = `SELECT EXISTS (
+    SELECT FROM information_schema.tables 
+    WHERE table_schema = 'public' 
+    AND table_name = '${tableName}'
+  );`;
+  const result = await db.one(query);
+  return result.exists;
 }
 
 // Handles execution of SQL queries
 async function executeSQLQuery(sqlQuery) {
+  console.log("Executing SQL Query:", sqlQuery); // Log query before execution
+
+  // if (!validateSQLQuery(sqlQuery)) {
+  //   throw new Error("Invalid SQL Query.");
+  // }
+
+  // const tableName = extractTableName(sqlQuery);
+  // if (!tableName) {
+  //   throw new Error("Unable to extract table name from SQL query.");
+  // }
+
+  // const tableExists = await checkTableExists(tableName);
+  // if (!tableExists) {
+  //   throw new Error(`Table "${tableName}" does not exist.`);
+  // }
+
   let responseMessage;
-  if (/^(insert|update|delete)/i.test(sqlQuery)) {
+  if (/^(insert|update|delete|create|drop)/i.test(sqlQuery)) {
     await db.none(sqlQuery);
     responseMessage = "Table updated successfully.";
 
@@ -51,17 +98,22 @@ async function executeSQLQuery(sqlQuery) {
       )}`;
     }
   } else {
-    const data = await db.any(sqlQuery.replace(/[{}]/g, ""));
-    responseMessage = data.length
-      ? JSON.stringify(data, null, 2)
-      : "Query executed successfully.";
+    try {
+      const data = await db.any(sqlQuery.replace(/[{}]/g, ""));
+      responseMessage = data.length
+        ? JSON.stringify(data, null, 2)
+        : "Query executed successfully.";
+    } catch (error) {
+      console.error("Database error:", error); // Log detailed error
+      throw new Error("Invalid SQL Query.");
+    }
   }
   return responseMessage;
 }
 
 // Finds related SQL commands after an update operation
 async function findRelatedCommand(sqlQuery) {
-  const prompt = `Identify if there is any related command to the following SQL query: "${sqlQuery}"\nRespond with the related command or "NONE",don't use any formating on the response`;
+  const prompt = `Identify if there is any related command to the following SQL query: "${sqlQuery}"\nRespond with the related command or "NONE"`;
   const model = genAI.getGenerativeModel({ model: "gemini-pro" });
   const response = await model.generateContent(prompt);
   return response.response.candidates[0].content.parts[0].text.trim();
